@@ -2,6 +2,10 @@ const FACTOR = 10_000
 
 const convertToMs = (duration: number) => Math.floor(duration / FACTOR)
 
+export interface AudioMetadata {
+  Metadata: [WordBoundary]
+}
+
 export interface ParseSubtitleOptions {
   /**
    * The function will split the cues based on this option
@@ -26,10 +30,8 @@ export interface ParseSubtitleOptions {
    * Array of metadata received throughout the websocket connection
    */
   metadata: Array<AudioMetadata>
-}
 
-interface AudioMetadata {
-  Metadata: [WordBoundary]
+  count?: number
 }
 
 /**
@@ -70,11 +72,11 @@ interface WordBoundary {
   }
 }
 
-const defaultOptions: Partial<ParseSubtitleOptions> = {
-  splitBy: "sentence",
-  wordsPerCue: 5,
-  durationPerCue: 5000,
-}
+// const defaultOptions: Partial<ParseSubtitleOptions> = {
+//   splitBy: "sentence",
+//   wordsPerCue: 5,
+//   durationPerCue: 5000,
+// }
 
 /**
  * Parses the metadata sent throughout the websocket connection and returns it as an array of object.
@@ -94,7 +96,12 @@ export function parseSubtitle({
   }))
 
   if (splitBy === "sentence") {
-    
+    return simplifiedMeta.map((meta) => ({
+      text: meta.text,
+      start: meta.offset,
+      duration: meta.duration,
+      end: meta.offset + meta.duration,
+    }))
   }
 
   if (splitBy === "duration") {
@@ -128,6 +135,7 @@ export function parseSubtitle({
     )
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (splitBy === "word") throw new Error("Not implemented")
 
   throw new Error("Invalid splitBy option")

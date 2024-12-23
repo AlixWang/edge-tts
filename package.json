@@ -1,6 +1,6 @@
 {
-  "name": "@echristian/edge-tts",
-  "version": "0.0.8",
+  "name": "@fe-daily/edge-tts",
+  "version": "0.0.10",
   "description": "Use Microsoft Edge's online text-to-speech service from JS code directly!",
   "keywords": [],
   "license": "MIT",

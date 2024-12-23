@@ -65,19 +65,19 @@ interface GenerateResult {
   subtitle: ReturnType<typeof parseSubtitle>
 }
 
-const defaultOptions: Partial<GenerateOptions> = {
-  voice: "en-US-AvaNeural",
-  language: "en-US",
+// const defaultOptions: Partial<GenerateOptions> = {
+//   voice: "en-US-AvaNeural",
+//   language: "en-US",
 
-  outputFormat: "audio-24khz-96kbitrate-mono-mp3",
-  rate: "default",
-  pitch: "default",
-  volume: "default",
+//   outputFormat: "audio-24khz-96kbitrate-mono-mp3",
+//   rate: "default",
+//   pitch: "default",
+//   volume: "default",
 
-  subtitle: {
-    splitBy: "sentence",
-  },
-}
+//   subtitle: {
+//     splitBy: "sentence",
+//   },
+// }
 
 /**
  * Asynchronously generates audio and subtitle data based on the provided options.
@@ -122,43 +122,100 @@ export async function generate(
 
   const audioChunks: Array<Uint8Array> = []
   const subtitleChunks: Array<AudioMetadata> = []
+  const rawAudioChunks: Array<BlobPart> = []
+  let isAudioComplete = false
+  let expectedLength = 0
 
   const { promise, resolve, reject } = Promise.withResolvers<GenerateResult>()
 
+  // Add timeout
+  const timeout = setTimeout(() => {
+    socket.close()
+    reject(new Error("Connection timeout after 30 seconds"))
+  }, 30000)
+
+  async function dealRawAudioChunks() {
+    while (rawAudioChunks.length) {
+      const data = rawAudioChunks.shift()
+      if (!data) continue
+      const blob = new Blob([data])
+      const bytes = new Uint8Array(await blob.arrayBuffer())
+      const binaryString = new TextDecoder().decode(bytes)
+      const separator = "Path:audio\r\n"
+      const index = binaryString.indexOf(separator)
+      if (index !== -1) {
+        const headerText = binaryString.substring(0, index)
+        const contentLengthMatch = /Content-Length: (\d+)/i.exec(headerText)
+        if (contentLengthMatch) {
+          expectedLength += parseInt(contentLengthMatch[1], 10)
+        }
+        const audioData = bytes.subarray(index + separator.length)
+        audioChunks.push(audioData)
+      }
+    }
+  }
+
+  socket.addEventListener("close", (event) => {
+    if (!isAudioComplete) {
+      reject(
+        new Error(
+          `WebSocket closed unexpectedly: ${event.code} ${event.reason}`,
+        ),
+      )
+    }
+    clearTimeout(timeout)
+  })
+
   socket.send(requestString)
 
-  socket.addEventListener("error", reject)
+  socket.addEventListener("error", (error) => {
+    clearTimeout(timeout)
+    reject(error)
+  })
 
   socket.addEventListener(
     "message",
     async (message: MessageEvent<string | Blob>) => {
-      if (typeof message.data !== "string") {
-        const blob = new Blob([message.data])
+      try {
+        if (typeof message.data !== "string") {
+          rawAudioChunks.push(message.data)
+          return
+        }
 
-        const separator = "Path:audio\r\n"
+        if (message.data.includes("Path:audio.metadata")) {
+          const jsonString = message.data.split("Path:audio.metadata")[1].trim()
+          const json = JSON.parse(jsonString) as AudioMetadata
 
-        const bytes = new Uint8Array(await blob.arrayBuffer())
-        const binaryString = new TextDecoder().decode(bytes)
+          return subtitleChunks.push(json)
+        }
 
-        const index = binaryString.indexOf(separator) + separator.length
-        const audioData = bytes.subarray(index)
+        if (message.data.includes("Path:turn.end")) {
+          await dealRawAudioChunks()
+          const totalLength = audioChunks.reduce(
+            (acc, chunk) => acc + chunk.length,
+            0,
+          )
 
-        return audioChunks.push(audioData)
-      }
+          if (expectedLength > 0 && totalLength < expectedLength) {
+            reject(
+              new Error(
+                `Incomplete audio data: got ${totalLength} bytes, expected ${expectedLength} bytes`,
+              ),
+            )
+            return
+          }
 
-      if (message.data.includes("Path:audio.metadata")) {
-        const jsonString = message.data.split("Path:audio.metadata")[1].trim()
-        const json = JSON.parse(jsonString) as AudioMetadata
-
-        return subtitleChunks.push(json)
-      }
-
-      if (message.data.includes("Path:turn.end")) {
-        resolve({
-          audio: new Blob(audioChunks),
-          subtitle: parseSubtitle({ metadata: subtitleChunks, ...subtitle }),
-        })
-        return
+          isAudioComplete = true
+          clearTimeout(timeout)
+          resolve({
+            audio: new Blob(audioChunks, { type: "audio/mp3" }),
+            subtitle: parseSubtitle({ metadata: subtitleChunks, ...subtitle }),
+          })
+          socket.close()
+        }
+      } catch (error) {
+        clearTimeout(timeout)
+        reject(error)
       }
     },
   )

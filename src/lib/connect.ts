@@ -39,11 +39,22 @@ export function connect(outputFormat: string): Promise<WebSocket> {
   }
 `
 
-  const { promise, resolve } = Promise.withResolvers<WebSocket>()
+  const { promise, resolve, reject } = Promise.withResolvers<WebSocket>()
+
+  const timeout = setTimeout(() => {
+    ws.close()
+    reject(new Error("Connection timeout after 10 seconds"))
+  }, 10000)
 
   ws.addEventListener("open", () => {
+    clearTimeout(timeout)
     ws.send(initialMessage)
     resolve(ws)
+  })
+
+  ws.addEventListener("error", (error) => {
+    clearTimeout(timeout)
+    reject(error)
   })
 
   return promise
